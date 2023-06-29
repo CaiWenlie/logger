@@ -11,11 +11,7 @@ import {FuncFilter} from '../filter-json/func-filter';
 
 let msgid = 0;
 let worker: Worker;
-    
-if (typeof window !== 'undefined' && window.Worker) {
-  worker = new window.Worker(codeToBlob(WorkerCode as any)); // 使用 blob对象的url
-}
- 
+
 export class WorkerStore extends DBBaseMethods {
   id: string;
   resolveMap: IJson<Function> = {};
@@ -38,6 +34,7 @@ export class WorkerStore extends DBBaseMethods {
     if (!worker) {
       worker = new window.Worker(codeToBlob(WorkerCode as any)); // 使用 blob对象的url
     }
+    // throw 'test';
     worker.onmessage = ({data}: {data: IWorkerBackMessage}) => {
       if (data.id === id) {
         this._onMessage(data);

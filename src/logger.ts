@@ -15,6 +15,8 @@ import {DBBaseMethods, TFilterOption} from './common/db-base';
 import {WorkerStore} from './store/worker-store';
 import {StorageStore} from './store/storage';
 import version from './version';
+import { WorkerDB } from './worker/store';
+import { TLog } from './common/t-log';
 
 class Logger {
   static version: string = version;
@@ -174,7 +176,15 @@ const LoggerHelper = {
     const options: IBaseInfoParam = {id, useConsole, maxRecords, onReport, onDiscard};
         
     if (storeType === 'idb' && canUseIndexedDB) {
-      return new WorkerStore(options);
+      try {
+        return new WorkerStore(options);
+      } catch (error) {
+        TLog.error('init worker error', error);
+        const { id, useConsole, maxRecords } = options;
+        const store = new WorkerDB(id);
+        store.baseInfo.injectConfig({ useConsole, maxRecords });
+        return store;
+      }
     } else {
       return new StorageStore({
         ...options,
