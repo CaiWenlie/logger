@@ -67,7 +67,7 @@ export class WorkerDB extends DBBase {
     }
 
     private _addDBData (dbData: ILogDBData) {
-      return new Promise<IAddReturn>(async (resolve) => {
+      return new Promise<IAddReturn>(async (resolve, reject) => {
         // TLog.log('traceid', dbData.traceid);
         const objectStore = await this._getStore('readwrite');
         const request = objectStore.add(dbData);
@@ -79,15 +79,11 @@ export class WorkerDB extends DBBase {
         // }
         request.onsuccess = async () => {
           this._checkMaxRecords();
-          let discard: ILogDBData | null = null;
-          resolve({
-            discard,
-            add: dbData,
-          });
+          resolve(null);
         };
         request.onerror = (event) => {
           TLog.error('数据写入失败', event);
-          resolve(null);
+          reject(null);
         };
       });
     }
@@ -136,12 +132,12 @@ export class WorkerDB extends DBBase {
     }
     
     get (logid: string) {
-      return new Promise<ILogDBData | null>(async (resolve) => {
+      return new Promise<ILogDBData | null>(async (resolve, reject) => {
         const objectStore = await this._getStore('readonly');
         const request = objectStore.index(INDEX_NAME).get(logid); // 传主键
         request.onerror = function () {
           TLog.error('数据查询失败', logid);
-          resolve(null);
+          reject(null);
         };
         request.onsuccess = function () {
           if (request.result) {
@@ -250,7 +246,7 @@ export class WorkerDB extends DBBase {
     }
 
     private _removeFirst (n = 1) {
-      return new Promise<ILogDBData | null>(async (resolve) => {
+      return new Promise<ILogDBData | null>(async (resolve, reject) => {
         const objectStore = await this._getStore('readwrite');
         const cursorObject = objectStore.openKeyCursor(); // ! 此处不能使用索引 因为需要删除最早的
         cursorObject.onsuccess = (event) => {
@@ -262,15 +258,14 @@ export class WorkerDB extends DBBase {
               cursor.continue();
               n--;
             }
+          }
+          if (!cursor || n <= 1) {
             resolve(null);
-          } else {
-            resolve(null);
-            TLog.warn('移除最早记录失败, cursor = null', event);
           }
         };
         cursorObject.onerror = (event) => {
           TLog.warn('移除最早记录失败', event);
-          resolve(null);
+          reject(null);
         };
       });
     }
