@@ -40,10 +40,9 @@ export class WorkerDB extends DBBase {
     index: number;
     msgMap: Record<TWorkerType, (data: any) => (Promise<any> | any)>;
 
+    private dbGetter: Promise<IDBDatabase>;
     private STORE_NAME = 'records';
     // private KEY_NAME = 'log_id';
-
-    private loadCallbacks: Function[] = []
 
     private recordsChecking = false
     private continueChecking = false
@@ -51,9 +50,7 @@ export class WorkerDB extends DBBase {
     constructor (id: string = 'default') {
       super({id, useConsole: true, maxRecords: 0});
       if (dbMap[this.name]) return dbMap[this.name];
-      if (!this.db) {
-        this._initDB();
-      }
+      this.dbGetter = this._initDB();
       dbMap[this.name] = this;
       this.msgMap = createMessageMap(this);
     }
@@ -65,20 +62,15 @@ export class WorkerDB extends DBBase {
           return null;
         }
         const dbData: ILogDBData = this.baseInfo.appendBaseInfo(data);
-        if (!this.db) {
-          this.loadCallbacks.push(async () => {
-            resolve(await this._addDBData(dbData));
-          });
-        } else {
-          resolve(await this._addDBData(dbData));
-        }
+        resolve(await this._addDBData(dbData));
       });
     }
 
     private _addDBData (dbData: ILogDBData) {
       return new Promise<IAddReturn>(async (resolve) => {
         // TLog.log('traceid', dbData.traceid);
-        const request = this._getStore('readwrite').add(dbData);
+        const objectStore = await this._getStore('readwrite');
+        const request = objectStore.add(dbData);
 
         // {
         //     __type: 'discard',
@@ -100,14 +92,15 @@ export class WorkerDB extends DBBase {
       });
     }
 
-    private _getStore (mode: IDBTransactionMode = 'readonly') {
-      return this.db.transaction([this.STORE_NAME], mode) // 新建事务，readwrite, readonly(默认), versionchange
+    private async _getStore (mode: IDBTransactionMode = 'readonly') {
+      const db = await this.dbGetter!
+      return db.transaction([this.STORE_NAME], mode) // 新建事务，readwrite, readonly(默认), versionchange
         .objectStore(this.STORE_NAME);
     }
 
     clear () {
-      return new Promise<boolean>((resolve) => {
-        const objectStore = this._getStore('readwrite');
+      return new Promise<boolean>(async (resolve) => {
+        const objectStore = await this._getStore('readwrite');
         const request = objectStore.clear();
         request.onsuccess = function () {
           TLog.log('清除数据成功');
@@ -143,8 +136,9 @@ export class WorkerDB extends DBBase {
     }
     
     get (logid: string) {
-      return new Promise<ILogDBData | null>((resolve) => {
-        const request = this._getStore('readonly').index(INDEX_NAME).get(logid); // 传主键
+      return new Promise<ILogDBData | null>(async (resolve) => {
+        const objectStore = await this._getStore('readonly');
+        const request = objectStore.index(INDEX_NAME).get(logid); // 传主键
         request.onerror = function () {
           TLog.error('数据查询失败', logid);
           resolve(null);
@@ -206,8 +200,8 @@ export class WorkerDB extends DBBase {
     }
 
     count () {
-      return new Promise<number>((resolve) => {
-        const objectStore = this._getStore();
+      return new Promise<number>(async (resolve) => {
+        const objectStore = await this._getStore();
 
         const index = objectStore.index(INDEX_NAME);
         const countRequest = index.count();
@@ -222,7 +216,7 @@ export class WorkerDB extends DBBase {
 
     private _getKey (logid: string) {
       return new Promise<number>(async (resolve) => {
-        const objectStore = this._getStore('readonly');
+        const objectStore = await this._getStore('readonly');
         const request = objectStore.index(INDEX_NAME).getKey(logid);
         request.onsuccess = (event) => {
           resolve((event?.target as any)?.result || -1);
@@ -243,7 +237,7 @@ export class WorkerDB extends DBBase {
           resolve(false);
           return;
         }
-        const objectStore = this._getStore('readwrite');
+        const objectStore = await this._getStore('readwrite');
         const request = objectStore.delete(key);
         request.onsuccess = function () {
           resolve(true);
@@ -256,8 +250,8 @@ export class WorkerDB extends DBBase {
     }
 
     private _removeFirst (n = 1) {
-      return new Promise<ILogDBData | null>((resolve) => {
-        const objectStore = this._getStore('readwrite');
+      return new Promise<ILogDBData | null>(async (resolve) => {
+        const objectStore = await this._getStore('readwrite');
         const cursorObject = objectStore.openKeyCursor(); // ! 此处不能使用索引 因为需要删除最早的
         cursorObject.onsuccess = (event) => {
           const cursor: IDBCursor = (event?.target as any).result;
@@ -299,14 +293,14 @@ export class WorkerDB extends DBBase {
       }
     }
 
-    private _cursorBase ({
+    private async _cursorBase ({
       onend, onvalue, onerror
     }: {
         onvalue: (d: ILogDBData) => void,
         onend: ()=>void,
         onerror: ()=>void,
     }) {
-      const objectStore = this._getStore();
+      const objectStore = await this._getStore();
       const cursorObject = objectStore.openCursor();
       cursorObject.onsuccess = function (event) {
         // 也可以在索引上打开 objectStore.index("id").openCursor()
@@ -324,22 +318,26 @@ export class WorkerDB extends DBBase {
       };
     }
 
-    private _initDB () {
+    private async _initDB () {
       // TLog.log('_initDB:', this.name);
-      const request = globalThis.indexedDB.open(this.name, 1);
-      request.onerror = function (event) {
-        TLog.error('数据库打开失败', event);
-      };
-      request.onsuccess = () => {
-        this.db = request.result as IDBDatabase;
-        this.loadCallbacks.forEach(fn => fn());
-        // TLog.log('数据库打开成功: ', this.baseInfo.name);
-      };
-      request.onupgradeneeded = (event) => {
-        // TLog.log('数据库onupgradeneeded', event);
-        const db = (event.target as any)?.result as IDBDatabase;
-        this._checkCreateStore(db, this.STORE_NAME);
-      };
+      TLog.log('initDB');
+      return new Promise<IDBDatabase>((resolve, reject) => {
+        const request = globalThis.indexedDB.open(this.name, 1);
+        request.onerror = function (event) {
+          TLog.error('数据库打开失败', event);
+          reject(event);
+        };
+        request.onsuccess = () => {
+          this.db = request.result as IDBDatabase;
+          resolve(this.db);
+          // TLog.log('数据库打开成功: ', this.baseInfo.name);
+        };
+        request.onupgradeneeded = (event) => {
+          // TLog.log('数据库onupgradeneeded', event);
+          const db = (event.target as any)?.result as IDBDatabase;
+          this._checkCreateStore(db, this.STORE_NAME);
+        };
+      })
     }
 
     private _checkCreateStore (db: IDBDatabase, id: string) {
